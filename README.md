@@ -1,36 +1,51 @@
 # ZeroMQ Cross-Language: C++ and Python
 
-Two interoperable REQ/REP examples using UTF-8 JSON. Both sides must agree on socket pattern, endpoint, framing, and message schema. Requires Ubuntu/Debian, C++17 compiler, CMake, libzmq, cppzmq headers, Python 3.10+, and PyZMQ.
+Two C++/Python REQ/REP examples exchange UTF-8 JSON; socket pattern, endpoint and schema must match. Ubuntu/Debian:
 
-## Install dependencies
+## Install
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake pkg-config libzmq3-dev cppzmq-dev python3 python3-venv
-python3 -m venv .venv && . .venv/bin/activate
-python -m pip install --upgrade pip pyzmq
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install pyzmq
 ```
 
-On distributions naming the header package `libcppzmq-dev`, install that package instead of `cppzmq-dev`.
+If `cppzmq-dev` unavailable, install equivalent `libcppzmq-dev`. Check discovery with `pkg-config --modversion libzmq`. CMake requires C++17.
 
-## Example 1: C++ server, Python client
+## 1. C++ server + Python client
+
+Terminal A, from root:
 
 ```bash
 cmake -S 01-cpp-server-python-client -B build/cpp-server
 cmake --build build/cpp-server
 ./build/cpp-server/server
-# In another terminal, from the repo root:
-. .venv/bin/activate && python 01-cpp-server-python-client/client.py
 ```
 
-## Example 2: Python server, C++ client
+Terminal B: `source .venv/bin/activate && python 01-cpp-server-python-client/client.py`
+
+Python sends JSON; C++ prints received bytes and replies. Ctrl+C stops server.
+
+## 2. Python server + C++ client
+
+Terminal A: `source .venv/bin/activate && python 02-python-server-cpp-client/server.py`
+
+Terminal B:
 
 ```bash
-python 02-python-server-cpp-client/server.py
-# In another terminal:
 cmake -S 02-python-server-cpp-client -B build/cpp-client
 cmake --build build/cpp-client
 ./build/cpp-client/client
 ```
 
-Both servers default to `tcp://127.0.0.1:5590` and accept `ZMQ_ENDPOINT` to override it. Ctrl+C stops a server. The sample JSON schema is `{ "message": "..." }`; the response contains `ok` and `reply`. These examples use plaintext TCP and loopback; add CURVE or a protected tunnel and firewall policy before using across hosts. Install matching libzmq development/runtime versions on both systems. Use `pkg-config --modversion libzmq` to inspect the installed version.
+C++ sends JSON; Python parses and responds. Ctrl+C stops server.
+
+## Configure and customize
+
+Default endpoint `tcp://127.0.0.1:5590`. Set `ZMQ_ENDPOINT` identically in both shells to change endpoint, e.g. `export ZMQ_ENDPOINT='tcp://127.0.0.1:5591'`. Both C++ and Python read this variable. For remote use, bind server to reachable interface, set client to server IP, configure firewall. Customize client JSON and update receiver as needed; keep one UTF-8 JSON value per message. Reply text is in server; C++ response is a string literal requiring escaped quotes.
+
+## Troubleshooting/security
+
+CMake cannot find libzmq: install `libzmq3-dev`, `pkg-config`, cppzmq headers and rerun. Missing `zmq.hpp`: install cppzmq headers. Port conflict: use another consistent endpoint. Timeout: start matching server and check address/firewall. Samples use plaintext TCP; use CURVE or encrypted tunnel, firewall and validate input before cross-host use.
