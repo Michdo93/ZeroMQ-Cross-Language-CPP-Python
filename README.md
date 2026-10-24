@@ -1,51 +1,84 @@
-# ZeroMQ Cross-Language: C++ and Python
+# ZeroMQ Cross-Language: C++ ⇄ Python
 
-Two C++/Python REQ/REP examples exchange UTF-8 JSON; socket pattern, endpoint and schema must match. Ubuntu/Debian:
+ZeroMQ only transports **bytes in frames**. As long as both sides agree on the socket pattern, the endpoint and the message format, a C++ program and a Python program can talk to each other directly – no wrappers, no code generator.
 
-## Install
+Companion repository of the book *From Zero to Hero – ZeroMQ in Python meistern*.
+
+| # | Folder | C++ | Python | Message format |
+|--:|--------|-----|--------|----------------|
+| 1 | [`01-cpp-server-python-client`](01-cpp-server-python-client) | REP server | REQ client | UTF-8 JSON text |
+| 2 | [`02-python-server-cpp-client`](02-python-server-cpp-client) | REQ client | REP server | UTF-8 JSON text |
+| 3 | [`03-json-nlohmann`](03-json-nlohmann) | REP server with `nlohmann::json`, validation, error replies | REQ client | structured JSON |
+| 4 | [`04-binary-pubsub`](04-binary-pubsub) | PUB, 100 Hz, packed `struct` + `float[6]` | SUB with `struct` + `numpy.frombuffer` | binary multipart |
+
+## Installation (Ubuntu)
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake pkg-config libzmq3-dev cppzmq-dev python3 python3-venv
+sudo apt install -y build-essential cmake pkg-config libzmq3-dev cppzmq-dev nlohmann-json3-dev python3 python3-venv
+git clone https://github.com/Michdo93/ZeroMQ-Cross-Language-CPP-Python.git
+cd ZeroMQ-Cross-Language-CPP-Python
 python3 -m venv .venv && source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install pyzmq
+pip install -r requirements.txt
 ```
 
-If `cppzmq-dev` unavailable, install equivalent `libcppzmq-dev`. Check discovery with `pkg-config --modversion libzmq`. CMake requires C++17.
+On older Ubuntu releases the cppzmq header package is called `libcppzmq-dev`. Check with `pkg-config --modversion libzmq` and `ls /usr/include/zmq.hpp`.
+
+Build all C++ programs:
+
+```bash
+for d in 0*/; do cmake -S "$d" -B "build/$d" && cmake --build "build/$d"; done
+```
 
 ## 1. C++ server + Python client
 
-Terminal A, from root:
-
 ```bash
-cmake -S 01-cpp-server-python-client -B build/cpp-server
-cmake --build build/cpp-server
-./build/cpp-server/server
+./build/01-cpp-server-python-client/server          # Terminal A
+python 01-cpp-server-python-client/client.py        # Terminal B
+# [Python client] reply: {'ok': True, 'reply': 'Hello from C++'}
 ```
-
-Terminal B: `source .venv/bin/activate && python 01-cpp-server-python-client/client.py`
-
-Python sends JSON; C++ prints received bytes and replies. Ctrl+C stops server.
 
 ## 2. Python server + C++ client
 
-Terminal A: `source .venv/bin/activate && python 02-python-server-cpp-client/server.py`
-
-Terminal B:
-
 ```bash
-cmake -S 02-python-server-cpp-client -B build/cpp-client
-cmake --build build/cpp-client
-./build/cpp-client/client
+python 02-python-server-cpp-client/server.py        # Terminal A
+./build/02-python-server-cpp-client/client          # Terminal B
+# [C++ client] reply: {"ok": true, "reply": "Hello from Python"}
 ```
 
-C++ sends JSON; Python parses and responds. Ctrl+C stops server.
+## 3. Structured JSON with nlohmann/json
 
-## Configure and customize
+```bash
+./build/03-json-nlohmann/server                     # Terminal A (port 5591)
+python 03-json-nlohmann/client.py                   # Terminal B
+```
 
-Default endpoint `tcp://127.0.0.1:5590`. Set `ZMQ_ENDPOINT` identically in both shells to change endpoint, e.g. `export ZMQ_ENDPOINT='tcp://127.0.0.1:5591'`. Both C++ and Python read this variable. For remote use, bind server to reachable interface, set client to server IP, configure firewall. Customize client JSON and update receiver as needed; keep one UTF-8 JSON value per message. Reply text is in server; C++ response is a string literal requiring escaped quotes.
+```
+{'count': 5, 'mean': 21.86, 'stddev': 0.75, 'min': 20.8, 'max': 23.1, 'ok': True, ...}
+{'error': 'values must not be empty', 'ok': False}
+{'error': '[json.exception.type_error.302] type must be array, but is string', 'ok': False}
+{'error': 'unknown command: reboot', 'ok': False}
+```
 
-## Troubleshooting/security
+Wrong input never crashes the server: every `json::exception` becomes an error reply (a REP socket must always answer).
 
-CMake cannot find libzmq: install `libzmq3-dev`, `pkg-config`, cppzmq headers and rerun. Missing `zmq.hpp`: install cppzmq headers. Port conflict: use another consistent endpoint. Timeout: start matching server and check address/firewall. Samples use plaintext TCP; use CURVE or encrypted tunnel, firewall and validate input before cross-host use.
+## 4. Binary multipart PUB/SUB
+
+```bash
+python 04-binary-pubsub/subscriber.py 200           # Terminal A, stops after 200 messages
+./build/04-binary-pubsub/publisher                  # Terminal B (Ctrl+C to stop)
+# received 200, lost 0, median transport delay ~400 us
+```
+
+Frames: `["imu.raw", header(<IQ, 12 bytes), samples(<f4 x 6, 24 bytes)]`. The C++ struct is declared with `#pragma pack(1)` and a `static_assert`; Python decodes it with `struct.Struct("<IQ")` and `numpy.frombuffer(..., dtype="<f4")`. Byte order (`<` = little endian) and layout must match exactly. For evolving schemas prefer MessagePack, Protocol Buffers or FlatBuffers.
+
+## Configuration
+
+All programs read `ZMQ_ENDPOINT` (defaults: 5590 for 1/2, 5591 for 3, 5592 for 4). Set the same value in both terminals, e.g. `export ZMQ_ENDPOINT=tcp://127.0.0.1:6000`. For other hosts bind the server to `tcp://*:PORT`, connect the client to `tcp://SERVER_IP:PORT` and add CURVE (see ZeroMQ-Advanced-Examples).
+
+## Pitfalls
+
+* `zmq::poll()` throws `zmq::error_t` with `EINTR` when a signal arrives – catch it (see `server.cpp`), otherwise Ctrl+C ends in `terminate called after throwing ...`.
+* `recv()` in cppzmq returns `std::optional<size_t>`; an empty optional means timeout (`rcvtimeo`).
+* `send_string()`/`recv_string()` in Python are UTF-8; C++ sees raw bytes – there is no hidden length prefix or terminator.
+* Use `sndmore` in C++ / `send_multipart()` in Python for multipart messages; a frame is delivered atomically together with all its siblings.
